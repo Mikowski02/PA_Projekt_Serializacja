@@ -1,98 +1,84 @@
-# Rejestrator Wektora Względnego Żółwia (ROS 2 & MessagePack)
+# Akwizycja, Binarna Serializacja i Repetycja Trajektorii Planarnej w ROS 2
 
-Węzeł ROS 2 integrujący się z symulatorem `turtlesim`. Skrypt automatycznie zeruje pozycję startową żółwia, wylicza jego wektor przemieszczenia w czasie, publikuje go w czasie rzeczywistym na dodatkowy topic oraz serializuje zebrane dane do pliku binarnego `vector_time`.
-
----
-
-## 1. Jak to działa w ekosystemie ROS 2?
-
-1. **Subskrypcja `/turtle1/pose`**:
-   Węzeł nasłuchuje pozycji żółwia wysyłanej przez `turtlesim_node`.
-2. **Automatyczne zerowanie punktu startowego**:
-   Niezależnie od tego, w którym miejscu planszy żółw się znajduje w momencie uruchomienia skryptu, pierwsza odebrana pozycja zostaje zapamiętana jako punkt odniesienia:
-   $$(x_0, y_0, \theta_0)$$
-   Od tego momentu pozycja startowa traktowana jest jako $(0, 0, 0)$.
-3. **Wyliczanie wektora przemieszczenia**:
-   Dla każdego kolejnego punktu w czasie $t$ wyliczany jest wektor ruchu:
-   $$\Delta x = x - x_0, \quad \Delta y = y - y_0, \quad \Delta \theta = \theta - \theta_0$$
-4. **Dodatkowy topic `/turtle1/relative_vector`**:
-   Skrypt działa jednocześnie jako nadawca – w czasie rzeczywistym publikuje bieżący wektor przemieszczenia na nowy topic `/turtle1/relative_vector` (`geometry_msgs/msg/Vector3`), co pozwala na podgląd na żywo w innych narzędziach ROS 2.
-5. **Zapis do pliku binarnego (`vector_time`)**:
-   Po wciśnięciu `Ctrl+C` zgromadzona trajektoria zostaje zserializowana za pomocą biblioteki `msgpack` bezpośrednio do pliku `vector_time`.
+Moduł do rejestracji, relatywizacji przestrzennej oraz odtwarzania wektora stanu robota kołowego na płaszczyźnie $SE(2)$ w środowisku ROS 2 z wykorzystaniem binarnego formatu MessagePack.
 
 ---
 
-## 2. Omówienie kodu `simple_serialization.py`
+## 1. Model Kinematyczny i Relatywizacja Przestrzenna
 
-### Klasa `TurtleVectorTracker(Node)`
-* Dziedziczy po `rclpy.node.Node` i tworzy węzeł o nazwie `turtle_vector_tracker`.
-* `self.sub`: Subskrybuje `/turtle1/pose` (`turtlesim/msg/Pose`).
-* `self.pub`: Tworzy nowy topic `/turtle1/relative_vector` (`geometry_msgs/msg/Vector3`).
-* `self.origin`: Zmienna przechowująca współrzędne początkowe $(x_0, y_0, \theta_0)$. Przed odebraniem pierwszej wiadomości ma wartość `None`.
-* `pose_callback(msg)`:
-  * Gdy `self.origin is None`, przypisuje aktualną pozycję żółwia jako punkt $(0, 0, 0)$ oraz zapisuje czas początkowy.
-  * Wylicza różnice $(\Delta x, \Delta y, \Delta \theta)$ oraz czas trwania $\Delta t$.
-  * Zapisuje próbki do bufora `self.data`.
-  * Publikuje komunikat `Vector3` na topic `/turtle1/relative_vector`.
+Stan kinematyczny robota mobilnego na płaszczyźnie opisany jest wektorem w przestrzeni konfiguracyjnej:
+$$\mathbf{q}(t) = \begin{bmatrix} x(t) \\ y(t) \\ \theta(t) \end{bmatrix} \in SE(2)$$
 
-### Funkcje zapisu i odczytu
-* `save_data(path, data)`: Otwiera plik w trybie binarnym (`"wb"`) i wywołuje `msgpack.pack(data, f)`.
-* `load_data(path)`: Otwiera plik w trybie binarnym (`"rb"`) i rekonstruuje strukturę za pomocą `msgpack.unpack(f)`.
-
-### Funkcja `main()`
-* Inicjalizuje ROS 2 (`rclpy.init()`).
-* Uruchamia pętlę zdarzeń `rclpy.spin(node)`.
-* Przechwytuje bezpiecznie przerwanie `Ctrl+C` (`KeyboardInterrupt`, `ExternalShutdownException`), niszczy węzeł i zamyka kontekst ROS 2.
-* Jeśli zebrano próbki, zapisuje je do pliku `vector_time`, wczytuje z powrotem i wyświetla w konsoli podsumowanie (czas trwania i wektor końcowy).
+W celach uniezależnienia rejestracji od globalnego punktu startowego symulatora (np. arbitralnej pozycji początkowej w `turtlesim`), węzeł dokonuje transformacji do lokalnego układu odniesienia związanego ze stanem początkowym $\mathbf{q}_0 = \mathbf{q}(t_0)$:
+$$\Delta x(t) = x(t) - x_0, \quad \Delta y(t) = y(t) - y_0, \quad \Delta \theta(t) = \theta(t) - \theta_0$$
+Punkt początkowy w chwili $t_0$ definiuje bazę $\Delta \mathbf{q}(t_0) = [0, 0, 0]^T$.
 
 ---
 
-## 3. Instrukcja uruchomienia krok po kroku
+## 2. Architektura Systemu i Analiza Przepływu Danych
 
-Otwórz 3 terminale (w każdym załaduj środowisko ROS 2):
-
-### Terminal 1: Uruchomienie planszy turtlesim
-```bash
-ros2 run turtlesim turtlesim_node
-```
-
-### Terminal 2: Uruchomienie rejestratora i dodatkowego topicu
-W katalogu projektu:
-```bash
-python3 simple_serialization.py
-```
-*Skrypt wyświetli punkt startowy żółwia i zacznie rejestrację wektora względnego.*
-
-### Terminal 3: Sterowanie żółwiem (klawisze strzałek)
-```bash
-ros2 run turtlesim turtle_teleop_key
-```
-
----
-
-## 4. Opcjonalny podgląd dodatkowego topicu na żywo
-
-W osobnym terminalu możesz sprawdzić, co nasz skrypt publikuje w czasie rzeczywistym:
-```bash
-ros2 topic echo /turtle1/relative_vector
-```
-Zobaczysz bieżący wektor przesunięcia względem pozycji początkowej:
-```yaml
-x: 0.452
-y: 0.128
-z: 0.080
-```
-
----
-
-## 5. Zakończenie rejestracji
-
-W oknie Terminala 2 wciśnij **Ctrl+C**. Węzeł zakończy nasłuchiwanie i wypisze podsumowanie:
+Projekt został rozdzielony na dwa ortogonalne węzły ROS 2:
 
 ```text
-Zapisano 84 próbek do vector_time
-Czas: 0.0s - 4.2s
-Wektor końcowy: dx=1.842, dy=0.915, dtheta=0.521
+[ turtlesim_node ] ---> Topic: /turtle1/pose ---> [ turtle_recorder.py ] ---> Topic: /turtle1/relative_vector
+                                                            |
+                                                 (Ctrl+C: zrzut do pliku)
+                                                            v
+                                                   Plik: vector_time
+                                                            |
+                                                 (Odczyt i deserializacja)
+                                                            v
+[ turtlesim_node ] <--- Topic: /turtle1/cmd_vel <--- [ turtle_player.py ] ---> Topic: /turtle1/target_vector
 ```
 
-W katalogu zostanie utworzony binarny plik `vector_time`.
+### 2.1. Węzeł 1: `turtle_recorder.py` (Rejestrator / Topic Akwizycji)
+* **Topic wejściowy**: `/turtle1/pose` (`turtlesim/msg/Pose`, częstotliwość $\approx 62.5\text{ Hz}$).
+* **Topic wyjściowy (czas rzeczywisty)**: `/turtle1/relative_vector` (`geometry_msgs/msg/Vector3`). Publikuje na bieżąco wektor przemieszczenia $[\Delta x, \Delta y, \Delta \theta]^T$.
+* **Dynamika czasowa i mechanizm zapisu**:
+  * **Buforowanie w RAM**: Próbki trajektorii wraz ze stemplem czasowym $\Delta t = t - t_0$ oraz wektorem prędkości $[v, \omega]^T$ są buforowane w pamięci operacyjnej ($O(1)$ amortized append). Bezpośredni zapis strumieniowy do pamięci dyskowej w pętli zwrotnej wprowadzałby niedeterministyczny narzut czasowy (I/O latency jitter), zakłócając synchronizację próbkowania.
+  * **Zrzut binarny**: Zrzut do pliku `vector_time` następuje po przechwyceniu sygnału przerwania procesu (`SIGINT` / Ctrl+C). Cała struktura jest serializowana jednorazowo funkcją `msgpack.pack()`, co ogranicza operację I/O do pojedynczego zapisu sekwencyjnego o złożoności $O(N)$.
+
+### 2.2. Węzeł 2: `turtle_player.py` (Odtwarzacz / Topic Sterowania)
+* **Deserializacja**: Odczytuje plik `vector_time` metodą `msgpack.unpack()`, rekonstruując macierz trajektorii.
+* **Topic referencyjny**: `/turtle1/target_vector` (`geometry_msgs/msg/Vector3`) – publikuje aktualnie zadany punkt wektora przemieszczenia.
+* **Topic wykonawczy**: `/turtle1/cmd_vel` (`geometry_msgs/msg/Twist`) – generator sygnałów sterujących przesyła w pętli timera o zadanym kroku $\Delta t$ prędkości liniowe $v(t)$ i kątowe $\omega(t)$ bezpośrednio do sterownika robota.
+* **Zakończenie trajektorii**: Po wyczerpaniu zadanego profilu węzeł publikuje zerowy wektor prędkości ($v=0, \omega=0$) i zamyka kontekst wykonawczy.
+
+---
+
+## 3. Efektywność Formatowania Binarnego
+
+Zastosowanie formatu MessagePack eliminuje narzut formatów tekstowych (JSON, CSV):
+* **Zachowanie precyzji numerycznej**: Zmienne zmiennoprzecinkowe reprezentowane są w standardzie IEEE 754 bez błędów konwersji tekstowej i zaokrągleń.
+* **Kompaktowość**: Rozmiar pliku wynikowego jest zredukowany o ok. 20–40% w stosunku do reprezentacji tekstowej.
+* **Złożoność obliczeniowa**: Brak parsowania leksykalnego przy deserializacji umożliwia natychmiastowe odtworzenie profilu ruchu.
+
+---
+
+## 4. Weryfikacja Doświadczalna
+
+### Etap 1: Rejestracja trajektorii
+```bash
+# Terminal 1: Węzeł symulatora
+ros2 run turtlesim turtlesim_node
+
+# Terminal 2: Akwizycja i relatywizacja
+python3 turtle_recorder.py
+
+# Terminal 3: Sterowanie manualne (zadawanie ruchu)
+ros2 run turtlesim turtle_teleop_key
+```
+*Po wykonaniu manewru wciśnij Ctrl+C w Terminalu 2, generując plik `vector_time`.*
+
+### Etap 2: Podgląd topicu wektora na żywo (opcjonalnie)
+```bash
+# Terminal 4: Monitorowanie względnego wektora ruchu
+ros2 topic echo /turtle1/relative_vector
+```
+
+### Etap 3: Repetycja trajektorii
+W celu powtórzenia zarejestrowanego profilu ruchu:
+```bash
+python3 turtle_player.py
+```
+*Żółw odtworzy zarejestrowaną sekwencję kinematyczną, a na topicu `/turtle1/target_vector` publikowany będzie aktualny wektor zadany.*
