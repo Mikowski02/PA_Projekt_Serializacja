@@ -14,36 +14,54 @@ class TurtlePlayer(Node):
         self.total = len(data["time"])
         self.idx = 0
 
-        dt = 0.05
-        if self.total > 1:
-            dt = max(0.01, (data["time"][-1] - data["time"][0]) / self.total)
+        # Timer częstotliwości 
+        self._timer_dt = 0.01
+        self._start_ros_time = None
+        self._recording_start = data["time"][0]
 
-        self.timer = self.create_timer(dt, self.timer_callback)
-        print(f"Odtwarzacz gotowy. Liczba punktow: {self.total}, krok: {dt:.3f}s")
+        self.timer = self.create_timer(self._timer_dt, self.timer_callback)
+        print(f"Odtwarzacz gotowy. Liczba punktow: {self.total}")
+        print(f"Czas trwania nagrania: {data['time'][-1] - data['time'][0]:.3f}s")
 
     def timer_callback(self):
+        if self._start_ros_time is None:
+            self._start_ros_time = self.get_clock().now()
+
+        # Czas od startu odtwarzania (sekundy)
+        elapsed = (self.get_clock().now() - self._start_ros_time).nanoseconds * 1e-9
+
+        # Wyślij wszystkie próbki, których timestamp już minął
+        while self.idx < self.total and \
+              (self.data["time"][self.idx] - self._recording_start) <= elapsed:
+
+            vec = Vector3()
+            vec.x = float(self.data["dx"][self.idx])
+            vec.y = float(self.data["dy"][self.idx])
+            vec.z = float(self.data["dtheta"][self.idx])
+            self.pub_vec.publish(vec)
+
+            cmd = Twist()
+            cmd.linear.x = float(self.data["v"][self.idx])
+            cmd.angular.z = float(self.data["w"][self.idx])
+            self.pub_cmd.publish(cmd)
+
+            self.idx += 1
+
+        # Koniec odtwarzania
         if self.idx >= self.total:
             self.stop_turtle()
             print("Odtwarzanie trajektorii zakonczone.")
             raise SystemExit
 
-        vec = Vector3()
-        vec.x = float(self.data["dx"][self.idx])
-        vec.y = float(self.data["dy"][self.idx])
-        vec.z = float(self.data["dtheta"][self.idx])
-        self.pub_vec.publish(vec)
-
-        cmd = Twist()
-        cmd.linear.x = float(self.data["v"][self.idx])
-        cmd.angular.z = float(self.data["w"][self.idx])
-        self.pub_cmd.publish(cmd)
-
-        self.idx += 1
-
     def stop_turtle(self):
-        cmd = Twist()
-        self.pub_cmd.publish(cmd)
+        try:
+            if rclpy.ok():
+                cmd = Twist()
+                self.pub_cmd.publish(cmd)
+        except Exception:
+            pass
 
+# MessagePack
 def load_data(path):
     with open(path, "rb") as f:
         return msgpack.unpack(f)

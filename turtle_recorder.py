@@ -1,4 +1,5 @@
 import os
+import math
 import time
 import rclpy
 from rclpy.node import Node
@@ -23,10 +24,11 @@ class TurtleRecorder(Node):
             self.start_time = now
             print(f"Start: x={msg.x:.2f}, y={msg.y:.2f}, theta={msg.theta:.2f}")
 
+        # wektor wzgledny
         dt = round(now - self.start_time, 3)
         dx = round(msg.x - self.origin[0], 4)
         dy = round(msg.y - self.origin[1], 4)
-        dtheta = round(msg.theta - self.origin[2], 4)
+        dtheta = round(math.atan2(math.sin(msg.theta - self.origin[2]), math.cos(msg.theta - self.origin[2])), 4)
 
         self.data["time"].append(dt)
         self.data["dx"].append(dx)
@@ -35,12 +37,14 @@ class TurtleRecorder(Node):
         self.data["v"].append(round(float(msg.linear_velocity), 4))
         self.data["w"].append(round(float(msg.angular_velocity), 4))
 
+        # wektor na zywo
         vec = Vector3()
         vec.x = float(dx)
         vec.y = float(dy)
         vec.z = float(dtheta)
         self.pub.publish(vec)
 
+# MessagePack
 def save_data(path, data):
     with open(path, "wb") as f:
         msgpack.pack(data, f)
